@@ -21,7 +21,7 @@ GUI（グラフィカルユーザーインターフェース）を備え、事�
 
 ### 3.1. テンプレート画像の保存場所
 判定に使用するテンプレート画像は、デフォルトで以下のディレクトリに格納されているものを使用する（GUI等で指定可能とする）。
-* **配置場所:** `/mnt/h/MuMuSharedFolder/VideoRecords/wm/template/`
+* **配置場所:** `/mnt/h/MuMuSharedFolder/VideoRecords/wm/templates/`
 * **縦画面用:** `vert_start.jpg`, `vert_mid.jpg`, `vert_end.jpg`
 * **横画面用:** `hor_start.jpg`, `hor_mid.jpg`, `hor_end.jpg`
 

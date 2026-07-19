@@ -1,0 +1,18 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# PyInstaller / Build
+build/
+dist/
+*.spec
+
+# Local Config
+config.json
+
+# Local Videos / Trimmed output
+*.mp4
+*.mkv
+trim/
