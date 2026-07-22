@@ -93,21 +93,286 @@ class MainWindow(QMainWindow):
         self._init_ui()
         self._init_player()
 
-    def _load_config(self):
-        """config.jsonから設定情報をロードする"""
-        possible_paths = [
-            os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json"),
-            os.path.join(os.path.dirname(__file__), "config.json"),
-            "config.json"
-        ]
-        for path in possible_paths:
-            if os.path.exists(path):
-                try:
-                    with open(path, "r", encoding="utf-8") as f:
-                        return json.load(f)
-                except Exception as e:
-                    print(f"Warning: Failed to load config at {path}: {e}")
-        return {"video_dir": "", "template_dir": ""}
+def load_config():
+    """config.jsonから設定情報をロードする"""
+    possible_paths = [
+        os.path.join(os.path.dirname(os.path.dirname(__file__)), "config.json"),
+        os.path.join(os.path.dirname(__file__), "config.json"),
+        "config.json"
+    ]
+    for path in possible_paths:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    return json.load(f)
+            except Exception as e:
+                print(f"Warning: Failed to load config at {path}: {e}")
+    return {"video_dir": "", "template_dir": ""}
+
+
+def auto_detect_settings(file_path):
+    """動画ファイル名と動画メタデータから、モード、向き、総再生時間、fpsを判定する"""
+    filename = os.path.basename(file_path)
+    
+    # 1. 処理モード自動判定
+    if "(incl after)" in filename or "incl agter" in filename:
+        mode_idx = 0  # main_after
+        mode_key = "main_after"
+    elif "-after" in filename:
+        mode_idx = 2  # after_only
+        mode_key = "after_only"
+    else:
+        mode_idx = 1  # main_only
+        mode_key = "main_only"
+
+    # 2. 画面の向き・動画メタデータ自動判定
+    orient_idx = 0
+    orient_key = "vertical"
+    total_duration = 0.0
+    fps = 30.0
+    width = 0
+    height = 0
+
+    cap = cv2.VideoCapture(file_path)
+    if cap.isOpened():
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        fps_val = cap.get(cv2.CAP_PROP_FPS)
+        frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+        total_duration = frames / fps_val if fps_val > 0 else 0.0
+        fps = fps_val if fps_val > 0 else 30.0
+        
+        if width < height:
+            orient_idx = 0  # vertical
+            orient_key = "vertical"
+        else:
+            orient_idx = 1  # horizontal
+            orient_key = "horizontal"
+        cap.release()
+
+    return {
+        "mode_idx": mode_idx,
+        "mode_key": mode_key,
+        "orient_idx": orient_idx,
+        "orient_key": orient_key,
+        "total_duration": total_duration,
+        "fps": fps,
+        "width": width,
+        "height": height
+    }
+
+
+def process_single_video(video_path, template_dir):
+    """単一の動画ファイルを解析・トリミング保存する"""
+    if not os.path.exists(video_path):
+        print(f"Error: 動画ファイルが存在しません: {video_path}")
+        return False
+
+    print(f"\n----------------------------------------")
+    print(f"処理対象: {video_path}")
+
+    # パラメータ自動判別
+    info = auto_detect_settings(video_path)
+    print(f"判定結果 - モード: {info['mode_key']}, 向き: {info['orient_key']}, 解像度: {info['width']}x{info['height']}")
+
+    # 解析実行
+    print("動画を解析中...")
+    threshold = 0.80
+    analyzer = VideoAnalyzer(
+        video_path=video_path,
+        template_dir=template_dir,
+        mode=info["mode_key"],
+        orientation=info["orient_key"],
+        threshold=threshold,
+        sample_rate=1.0
+    )
+
+    last_progress = [-1]
+    def print_analysis_progress(p):
+        if p % 10 == 0 and p != last_progress[0]:
+            print(f"解析進捗: {p}%")
+            last_progress[0] = p
+
+    results = analyzer.analyze(progress_callback=print_analysis_progress)
+    print("解析完了。切り出しタイムスタンプ:")
+    for k, v in results.items():
+        print(f"  {k}: {v:.2f} 秒")
+
+    # 切り出し保存準備
+    input_dir = os.path.dirname(os.path.abspath(video_path))
+    trim_dir = os.path.join(input_dir, "trim")
+    filename = os.path.basename(video_path)
+
+    date_match = re.search(r"(\d{4}-\d{1,2}-\d{1,2})", filename)
+    if date_match:
+        date_str = date_match.group(1)
+    else:
+        date_str, _ = os.path.splitext(filename)
+
+    trimmers = []
+    mode_key = info["mode_key"]
+
+    if mode_key in ["main_after", "main_only"]:
+        start = results["main_start"]
+        end = results["main_end"]
+        if start < end:
+            output_name = f"{date_str}-main-trim.mp4"
+            output_path = os.path.join(trim_dir, output_name)
+            trimmers.append(VideoTrimmer(video_path, output_path, start, end))
+        else:
+            print("Warning: 本編の開始位置が終了位置以上のためスキップします。")
+
+    if mode_key in ["main_after", "after_only"]:
+        start = results["after_start"]
+        end = results["after_end"]
+        if start < end:
+            output_name = f"{date_str}-after-trim.mp4"
+            output_path = os.path.join(trim_dir, output_name)
+            trimmers.append(VideoTrimmer(video_path, output_path, start, end))
+        else:
+            print("Warning: AFTERの開始位置が終了位置以上のためスキップします。")
+
+    if not trimmers:
+        print("Error: 有効なトリミング対象が存在しませんでした。")
+        return False
+
+    # FFmpeg切り出し実行
+    print("FFmpegで切り出し保存を開始します...")
+    total_trimmers = len(trimmers)
+    for i, trimmer in enumerate(trimmers):
+        print(f"[{i+1}/{total_trimmers}] 保存先: {trimmer.output_path}")
+        last_trim_p = [-1]
+        def print_trim_progress(p):
+            if p % 20 == 0 and p != last_trim_p[0]:
+                print(f"  切り出し進捗: {p}%")
+                last_trim_p[0] = p
+        trimmer.run(progress_callback=print_trim_progress)
+
+    print("処理完了。")
+    return True
+
+
+def run_cli(input_path):
+    """CLIモードで自動で解析およびカット・保存を実行する (単一動画またはtxtファイルリストに対応)"""
+    if not os.path.exists(input_path):
+        print(f"Error: 入力ファイルが存在しません: {input_path}")
+        sys.exit(1)
+
+    # 設定読み込み
+    config_data = load_config()
+    template_dir = config_data.get("template_dir", "")
+    if not template_dir or not os.path.exists(template_dir):
+        print(f"Error: テンプレートフォルダが存在しませんまたは指定されていません: {template_dir}")
+        sys.exit(1)
+
+    # テキストファイル (.txt) が指定された場合
+    if input_path.lower().endswith(".txt"):
+        print(f"=== WM-Trim CLI バッチモード開始 ===")
+        print(f"リストファイル: {input_path}")
+
+        video_paths = []
+        with open(input_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    video_paths.append(line)
+
+        total_videos = len(video_paths)
+        print(f"対象動画数: {total_videos} 件")
+
+        success_count = 0
+        for idx, video_path in enumerate(video_paths, 1):
+            print(f"\n========================================")
+            print(f" Progress: [{idx} / {total_videos}]")
+            print(f"========================================")
+            if process_single_video(video_path, template_dir):
+                success_count += 1
+
+        print(f"\n=== 全バッチ処理完了: {success_count}/{total_videos} 件 成功 ===")
+
+    else:
+        print(f"=== WM-Trim CLI モード開始 ===")
+        process_single_video(input_path, template_dir)
+        print("=== 完了 ===")
+
+
+
+class AnalysisThread(QThread):
+    progress = Signal(int)
+    finished_analysis = Signal(dict)
+    error = Signal(str)
+
+    def __init__(self, video_path, template_dir, mode, orientation, threshold):
+        super().__init__()
+        self.video_path = video_path
+        self.template_dir = template_dir
+        self.mode = mode
+        self.orientation = orientation
+        self.threshold = threshold
+
+    def run(self):
+        try:
+            analyzer = VideoAnalyzer(
+                video_path=self.video_path,
+                template_dir=self.template_dir,
+                mode=self.mode,
+                orientation=self.orientation,
+                threshold=self.threshold,
+                sample_rate=1.0  # 1秒間に1フレーム解析
+            )
+            
+            def update_progress(p):
+                self.progress.emit(p)
+                
+            results = analyzer.analyze(progress_callback=update_progress)
+            self.finished_analysis.emit(results)
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class TrimmingThread(QThread):
+    progress = Signal(int)
+    finished_trim = Signal()
+    error = Signal(str)
+
+    def __init__(self, trimmers):
+        super().__init__()
+        self.trimmers = trimmers
+
+    def run(self):
+        try:
+            total = len(self.trimmers)
+            for i, trimmer in enumerate(self.trimmers):
+                def update_progress(p):
+                    # 全体の進捗率を計算 (各トリマーの進捗を等分に反映)
+                    overall = int((i * 100 + p) / total)
+                    self.progress.emit(overall)
+                
+                trimmer.run(progress_callback=update_progress)
+            
+            self.finished_trim.emit()
+        except Exception as e:
+            self.error.emit(str(e))
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("With×MEETS 自動切り出しツール")
+        self.resize(1100, 700)
+
+        # 状態保持用変数
+        self.video_path = ""
+        self.total_duration = 0.0
+        self.fps = 30.0
+        self.is_slider_pressed = False
+
+        # 設定ファイル読み込み
+        self.config_data = load_config()
+        
+        # UI構築
+        self._init_ui()
+        self._init_player()
 
     def _init_ui(self):
         # メインレイアウト
@@ -323,12 +588,20 @@ class MainWindow(QMainWindow):
             self.file_path_edit.setText(file_path)
             
             # 動画情報を読み込んで自動判定
-            self._auto_detect_settings(file_path)
+            info = auto_detect_settings(file_path)
+            self.mode_combo.setCurrentIndex(info["mode_idx"])
+            self.orientation_combo.setCurrentIndex(info["orient_idx"])
+            self.total_duration = info["total_duration"]
+            self.fps = info["fps"]
+
+            if info["width"] > 0 and info["height"] > 0:
+                self.status_label.setText(f"動画読込完了: {info['width']}x{info['height']}, 長さ: {self._format_time(self.total_duration)}")
+            else:
+                self.status_label.setText("動画ファイルのメタデータ取得に失敗しました。")
             
             # メディアプレイヤーにセット
             self.media_player.setSource(QUrl.fromLocalFile(file_path))
             self.analyze_btn.setEnabled(True)
-            self.status_label.setText("解析パラメータを確認して「動画解析開始」を押してください。")
 
     def _browse_template_dir(self):
         dir_path = QFileDialog.getExistingDirectory(
@@ -336,40 +609,6 @@ class MainWindow(QMainWindow):
         )
         if dir_path:
             self.temp_dir_edit.setText(dir_path)
-
-    def _auto_detect_settings(self, file_path):
-        filename = os.path.basename(file_path)
-        
-        # 1. 処理モード自動判定
-        # * 本編 ＋ AFTER: YYYY-MM-DD(incl after).mp4 （(incl after) が含まれる）
-        # * AFTERのみ: YYYY-M-DD-after.mp4 （-after が含まれる）
-        # * 本編のみ: YYYY-MM-DD.mp4 （上記どちらも含まれない場合）
-        if "(incl after)" in filename or "incl agter" in filename: # タイプミス対応も含めて柔軟に
-            self.mode_combo.setCurrentIndex(0)  # main_after
-        elif "-after" in filename:
-            self.mode_combo.setCurrentIndex(2)  # after_only
-        else:
-            self.mode_combo.setCurrentIndex(1)  # main_only
-
-        # 2. 画面の向き自動判定 (解像度取得)
-        cap = cv2.VideoCapture(file_path)
-        if cap.isOpened():
-            w = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-            h = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
-            fps = cap.get(cv2.CAP_PROP_FPS)
-            frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
-            self.total_duration = frames / fps if fps > 0 else 0.0
-            self.fps = fps if fps > 0 else 30.0
-            
-            if w < h:
-                self.orientation_combo.setCurrentIndex(0)  # vertical
-            else:
-                self.orientation_combo.setCurrentIndex(1)  # horizontal
-            cap.release()
-            
-            self.status_label.setText(f"動画読込完了: {int(w)}x{int(h)}, 長さ: {self._format_time(self.total_duration)}")
-        else:
-            self.status_label.setText("動画ファイルのメタデータ取得に失敗しました。")
 
     def _on_mode_changed(self, index):
         # 選択したモードに応じて、微調整スピンボックスの表示・非表示を制御
@@ -676,7 +915,15 @@ class MainWindow(QMainWindow):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        arg_path = sys.argv[1]
+        # 引数が指定されている場合（オプションパラメータフラグ除く）はCLIモードで実行
+        if not arg_path.startswith("-"):
+            run_cli(arg_path)
+            sys.exit(0)
+
     app = QApplication(sys.argv)
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
+

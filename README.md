@@ -40,20 +40,36 @@
 
 ---
 
-## 🚀 起動方法 (Python環境)
+## 🚀 起動方法 (uv 環境)
 
-コードのまま実行する場合は、以下の手順でセットアップと起動を行います。
+コードのまま実行する場合は、高速なPythonパッケージマネージャー [`uv`](https://github.com/astral-sh/uv) を使用して以下の手順でセットアップと起動を行います。
 
 ### 1. 依存ライブラリのインストール
-プロジェクトのルートディレクトリで以下を実行します。
+プロジェクトのルートディレクトリで以下を実行し、仮想環境の作成および依存ライブラリのインストールを行います。
 
 ```bash
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
 ### 2. アプリケーションの起動
+
+#### GUIモードで起動
 ```bash
-python src/app.py
+uv run python src/app.py
+```
+
+#### CLIモード（全自動）で起動
+mp4ファイルのパス、または動画パスが列挙された `.txt` ファイルのパスを指定して実行すると、GUIを開かずに全自動で一括処理されます。
+
+```bash
+# 単一の動画ファイルを処理する場合
+uv run python src/app.py "C:/Path/To/Your/Video/2026-07-21(incl after).mp4"
+
+# テキストファイルに列挙された動画を一括バッチ処理する場合 (10個ずつに分けたリスト等)
+uv run python src/app.py lists/incl_after_part01.txt
+
+# あるいは exe ファイルの場合:
+WithMeetsTrimmer.exe lists/after_part01.txt
 ```
 
 ---
@@ -64,10 +80,10 @@ Python環境がないPCでも動くスタンドアロンの実行ファイルを
 
 ```bash
 # ビルドツールのインストール
-pip install pyinstaller
+uv pip install pyinstaller
 
 # ビルド実行
-pyinstaller --noconsole --onefile --name="WithMeetsTrimmer" src/app.py
+uv run pyinstaller --noconsole --onefile --name="WithMeetsTrimmer" src/app.py
 ```
 
 ### ⚠️ exe化の際の注意点 (FFmpegの配置)

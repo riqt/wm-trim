@@ -16,3 +16,4 @@ config.json
 *.mp4
 *.mkv
 trim/
+lists/
